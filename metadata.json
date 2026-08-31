@@ -1,0 +1,6 @@
+{
+  "name": "Gemini LifeOS",
+  "description": "A production-oriented, user-authenticated private journal, reflection engine, goal tracker, and AI life OS powered by Google Gemini and Cloud Firestore with strict owner-bound data isolation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
