@@ -41,26 +41,62 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
   const [tagInput, setTagInput] = useState<string>('');
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  // Tail of the sequential persistence queue.  Every new write chains onto this
+  // promise so that concurrent UI events (onBlur, onChange, tag add/remove, send)
+  // cannot dispatch overlapping Firestore writes that arrive out of order.
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isSending]);
 
-  // Persist interaction snapshot helper
-  const persistState = async (updatedMessages: ChatMessage[], newSummary?: string, newTags?: string[]) => {
-    const docToSave: InteractionDoc = {
-      id: interactionId,
-      userId,
-      title: title.trim() || 'Untitled Reflection',
-      category,
-      messages: updatedMessages,
-      summary: newSummary !== undefined ? newSummary : summary,
-      tags: newTags !== undefined ? newTags : tags,
-      createdAt: initialInteraction?.createdAt || Date.now(),
-      updatedAt: Date.now(),
-    };
-    await saveInteraction(userId, docToSave);
-    onSaved(docToSave);
+  // Builds and writes one persistence snapshot.
+  // overrideCategory lets the category onChange handler pass the newly selected
+  // value explicitly, bypassing the stale React render-cycle closure that would
+  // otherwise still hold the previous category value at the moment of the call.
+  const persistState = async (
+    updatedMessages: ChatMessage[],
+    newSummary?: string,
+    newTags?: string[],
+    overrideCategory?: JournalCategory,
+  ): Promise<void> => {
+    try {
+      const docToSave: InteractionDoc = {
+        id: interactionId,
+        userId,
+        title: title.trim() || 'Untitled Reflection',
+        category: overrideCategory ?? category,
+        messages: updatedMessages,
+        summary: newSummary !== undefined ? newSummary : summary,
+        tags: newTags !== undefined ? newTags : tags,
+        createdAt: initialInteraction?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      };
+      await saveInteraction(userId, docToSave);
+      onSaved(docToSave);
+    } catch (err: any) {
+      // saveInteraction() absorbs Firestore errors internally with a localStorage
+      // fallback, so this catch is a forward-compatibility guard: if that internal
+      // catch is ever removed, the error surfaces here via statusMessage rather
+      // than becoming a silent unhandled Promise rejection.
+      console.error('[GeminiLifeOS] persistState error:', err);
+      setStatusMessage({ type: 'error', text: 'Entry could not be saved. Changes may be lost.' });
+    }
+  };
+
+  // Enqueues a persistence operation onto the sequential queue so that writes
+  // from concurrent UI events are always dispatched to Firestore in the order
+  // they were requested, preventing last-writer-arrival data races.
+  const enqueuePersist = (
+    updatedMessages: ChatMessage[],
+    newSummary?: string,
+    newTags?: string[],
+    overrideCategory?: JournalCategory,
+  ): Promise<void> => {
+    persistQueueRef.current = persistQueueRef.current.then(() =>
+      persistState(updatedMessages, newSummary, newTags, overrideCategory)
+    );
+    return persistQueueRef.current;
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -82,7 +118,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
     setStatusMessage(null);
 
     // Save prompt immediately
-    await persistState(newMessages);
+    await enqueuePersist(newMessages);
 
     try {
       const response = await sendJournalChatMessage(
@@ -101,7 +137,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
 
       const finalMessages = [...newMessages, aiMsg];
       setMessages(finalMessages);
-      await persistState(finalMessages);
+      await enqueuePersist(finalMessages);
 
       // Auto-extract title if still empty
       if (!title.trim()) {
@@ -132,7 +168,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
       setSummary(result.summary);
       const combinedTags = Array.from(new Set([...tags, ...result.tags]));
       setTags(combinedTags);
-      await persistState(messages, result.summary, combinedTags);
+      await enqueuePersist(messages, result.summary, combinedTags);
       setStatusMessage({ type: 'success', text: 'Summary synthesized and saved!' });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err?.message || 'Summarization failed.' });
@@ -184,20 +220,20 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
     setStatusMessage({ type: 'success', text: `Goal "${g.title}" added to your LifeOS Goals!` });
   };
 
-  const handleAddTag = () => {
+  const handleAddTag = async () => {
     const clean = tagInput.trim().replace(/^#/, '');
     if (clean && !tags.includes(clean)) {
       const updatedTags = [...tags, clean];
       setTags(updatedTags);
       setTagInput('');
-      persistState(messages, summary, updatedTags);
+      await enqueuePersist(messages, summary, updatedTags);
     }
   };
 
-  const handleRemoveTag = (t: string) => {
+  const handleRemoveTag = async (t: string) => {
     const updated = tags.filter((item) => item !== t);
     setTags(updated);
-    persistState(messages, summary, updated);
+    await enqueuePersist(messages, summary, updated);
   };
 
   return (
@@ -218,7 +254,7 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            onBlur={() => persistState(messages)}
+            onBlur={async () => { await enqueuePersist(messages); }}
             placeholder="Journal Reflection Title..."
             className="text-lg font-semibold bg-transparent text-white placeholder-slate-500 border-b border-transparent hover:border-slate-800 focus:border-indigo-500 focus:outline-none px-1 py-0.5 w-full max-w-md transition-colors"
           />
@@ -231,7 +267,13 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
             onChange={(e) => {
               const newCat = e.target.value as JournalCategory;
               setCategory(newCat);
-              persistState(messages);
+              // Pass newCat explicitly via overrideCategory — setCategory() does
+              // not update the React closure synchronously, so reading `category`
+              // inside persistState would still hold the previous value without
+              // this override.  The returned Promise is chained onto the queue
+              // (write is serialised) but not awaited here because onChange must
+              // return void.
+              enqueuePersist(messages, undefined, undefined, newCat);
             }}
             className="text-xs bg-slate-900 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
           >
