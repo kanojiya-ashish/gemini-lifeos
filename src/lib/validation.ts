@@ -27,12 +27,32 @@ export interface ValidationError {
 
 /**
  * Validates a single raw message object.
- * Requires content to be a string when present; rejects non-string content.
+ * - role: optional. If present and non-null, must be one of: user, model, assistant.
+ *   Invalid provided roles are rejected — not silently converted — because an
+ *   arbitrary role value can be used to inject fake structural framing into the
+ *   assembled prompt transcript.  An absent or null role is allowed for backward
+ *   compatibility with clients that omit the field.
+ * - content: optional. If present and non-null, must be a string within the
+ *   character limit.
  * Returns a ValidationError or null.
  */
+// Roles the application recognises.  Matches the Gemini SDK canonical name
+// ('model'), the OpenAI-convention alias ('assistant') already normalised by
+// the /chat route, and the user turn ('user').
+const VALID_ROLES = new Set(['user', 'model', 'assistant']);
+
 function validateMessageObject(m: unknown, fieldPath: string): ValidationError | null {
   if (!m || typeof m !== 'object') {
     return { field: fieldPath, message: `${fieldPath} must be an object.` };
+  }
+  const role = (m as any).role;
+  if (role !== undefined && role !== null) {
+    if (!VALID_ROLES.has(role)) {
+      return {
+        field: `${fieldPath}.role`,
+        message: `${fieldPath}.role must be one of: user, model, assistant.`,
+      };
+    }
   }
   const content = (m as any).content;
   if (content !== undefined && content !== null) {
