@@ -223,7 +223,6 @@ app.get('/api/health', (req: Request, res: Response) => {
     status: 'ok',
     service: 'Gemini LifeOS API',
     timestamp: Date.now(),
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
   });
 });
 
