@@ -8,6 +8,7 @@ import { getAuth as getAdminAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import firebaseConfigJson from './firebase-applet-config.json' with { type: 'json' };
+import { validateMessages, validateTitle, validateCategory, validateEntries, LIMITS } from './src/lib/validation.js';
 
 dotenv.config();
 
@@ -232,9 +233,14 @@ app.post('/api/gemini/chat', verifyUserAuth, async (req: AuthenticatedRequest, r
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], category = 'daily_reflection', userTitle = '' } = body;
 
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'Bad Request: messages array is required and cannot be empty.' });
-    }
+    const msgErr = validateMessages(messages);
+    if (msgErr) return res.status(400).json({ error: `Bad Request: ${msgErr.message}` });
+
+    const titleErr = validateTitle(userTitle, 'userTitle', LIMITS.TITLE_MAX_CHARS);
+    if (titleErr) return res.status(400).json({ error: `Bad Request: ${titleErr.message}` });
+
+    const catErr = validateCategory(category, 'category');
+    if (catErr) return res.status(400).json({ error: `Bad Request: ${catErr.message}` });
 
     const systemInstruction = `You are the empathetic, insightful AI Companion and Life Strategist in "Gemini LifeOS".
 Your mission is to help the user reflect deeply, unpack their thoughts, cultivate clarity, overcome obstacles, and identify personal growth opportunities.
@@ -250,10 +256,11 @@ Guidelines:
 4. Keep replies clear, well-structured (use Markdown sparingly for emphasis), and focused on the user's wellbeing and agency.
 5. If the user expresses goals, acknowledge their commitment and help sharpen their focus.`;
 
-    // Convert messages to Gemini contents structure defensively
+    // Convert messages to Gemini contents structure.
+    // content is guaranteed to be a string by validateMessages above.
     const contents = messages.map((m: any) => ({
       role: m.role === 'model' || m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: String(m.content || '').trim() }],
+      parts: [{ text: (m.content ?? '').trim() }],
     }));
 
     const result = await generateContentWithFallback(contents, systemInstruction);
@@ -278,9 +285,11 @@ app.post('/api/gemini/summarize', verifyUserAuth, async (req: AuthenticatedReque
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], title = '' } = body;
 
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'Bad Request: messages must be provided for summarization.' });
-    }
+    const msgErr = validateMessages(messages);
+    if (msgErr) return res.status(400).json({ error: `Bad Request: ${msgErr.message}` });
+
+    const titleErr = validateTitle(title, 'title', LIMITS.TITLE_MAX_CHARS);
+    if (titleErr) return res.status(400).json({ error: `Bad Request: ${titleErr.message}` });
 
     const conversationTranscript = messages
       .map((m: any) => `${m.role === 'model' ? 'Gemini' : 'User'}: ${m.content}`)
@@ -339,9 +348,11 @@ app.post('/api/gemini/extract-goals', verifyUserAuth, async (req: AuthenticatedR
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], entryTitle = '' } = body;
 
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'Bad Request: conversation messages are required.' });
-    }
+    const msgErr = validateMessages(messages);
+    if (msgErr) return res.status(400).json({ error: `Bad Request: ${msgErr.message}` });
+
+    const titleErr = validateTitle(entryTitle, 'entryTitle', LIMITS.TITLE_MAX_CHARS);
+    if (titleErr) return res.status(400).json({ error: `Bad Request: ${titleErr.message}` });
 
     const conversationTranscript = messages
       .map((m: any) => `${m.role === 'model' ? 'Gemini' : 'User'}: ${m.content}`)
@@ -401,9 +412,11 @@ app.post('/api/gemini/weekly-reflection', verifyUserAuth, async (req: Authentica
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { entries = [], timeRangeLabel = 'Past 7 Days' } = body;
 
-    if (!Array.isArray(entries) || entries.length === 0) {
-      return res.status(400).json({ error: 'Bad Request: entries array must contain at least one journal entry.' });
-    }
+    const entriesErr = validateEntries(entries);
+    if (entriesErr) return res.status(400).json({ error: `Bad Request: ${entriesErr.message}` });
+
+    const labelErr = validateTitle(timeRangeLabel, 'timeRangeLabel', LIMITS.TIMELABEL_MAX_CHARS);
+    if (labelErr) return res.status(400).json({ error: `Bad Request: ${labelErr.message}` });
 
     const summariesTranscript = entries.map((entry: any, index: number) => {
       const msgs = Array.isArray(entry.messages)
