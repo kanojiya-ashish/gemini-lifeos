@@ -130,9 +130,16 @@ const verifyUserAuth = async (req: AuthenticatedRequest, res: Response, next: Ne
     next();
   } catch (err: any) {
     console.error('[GeminiLifeOS] Token verification failed:', err?.code || err?.message || 'Invalid JWT');
-    
-    // In restricted sandbox / demo fallback sessions where preview cannot reach live auth server
-    if (process.env.NODE_ENV !== 'production' && token.startsWith('mock_verified_jwt_bearer_token_')) {
+
+    // Demo mode bypass: only active when ENABLE_DEMO_MODE=true AND NODE_ENV is not 'production'.
+    // The double-guard means both conditions must independently be true simultaneously —
+    // a misconfigured production deployment that accidentally sets ENABLE_DEMO_MODE=true
+    // is still blocked by the NODE_ENV check, and vice-versa.
+    if (
+      process.env.ENABLE_DEMO_MODE === 'true' &&
+      process.env.NODE_ENV !== 'production' &&
+      token.startsWith('mock_verified_jwt_bearer_token_')
+    ) {
       const mockUid = token.replace('mock_verified_jwt_bearer_token_', '');
       req.verifiedUid = mockUid;
       return next();
@@ -475,6 +482,28 @@ app.post('/api/gemini/weekly-reflection', verifyUserAuth, async (req: Authentica
 // ---------------- VITE & STATIC SERVING ----------------
 
 async function startServer() {
+  // Hard safeguard: refuse to start if demo mode is enabled in a production environment.
+  // Fail-closed defence — if someone accidentally sets both ENABLE_DEMO_MODE=true and
+  // NODE_ENV=production, the server exits rather than running with mock auth active.
+  // On Cloud Run this causes the health check to fail, the revision to be marked failed,
+  // and no traffic to be routed to it.
+  if (process.env.ENABLE_DEMO_MODE === 'true' && process.env.NODE_ENV === 'production') {
+    console.error(
+      '[GeminiLifeOS] FATAL: ENABLE_DEMO_MODE=true is set in a production environment ' +
+      '(NODE_ENV=production). Mock authentication must never be enabled in production. ' +
+      'Refusing to start.'
+    );
+    process.exit(1);
+  }
+
+  // Warn clearly at startup whenever demo mode is active in non-production.
+  if (process.env.ENABLE_DEMO_MODE === 'true') {
+    console.warn(
+      '[GeminiLifeOS] WARNING: ENABLE_DEMO_MODE=true — mock token authentication is active. ' +
+      'This must NOT be set in production deployments.'
+    );
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

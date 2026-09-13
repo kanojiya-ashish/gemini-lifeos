@@ -57,7 +57,34 @@ service cloud.firestore {
 
 ---
 
-## 3. Secret Manager Configuration & IAM Setup
+## 3. Local Development Setup
+
+For local development, copy `.env.example` to `.env` and fill in your credentials:
+
+```bash
+cp .env.example .env
+# Edit .env with your GEMINI_API_KEY and Firebase project values
+bun run dev   # or: npm run dev
+```
+
+To develop without a real Firebase project (e.g., inside Google AI Studio where
+Google OAuth popups are blocked by the iframe sandbox), set:
+
+```
+ENABLE_DEMO_MODE="true"
+```
+
+in your local `.env` file. This enables mock token authentication **on the local
+server only**.
+
+> **Security note:** `ENABLE_DEMO_MODE=true` must never be set in production.
+> The server performs a hard startup check: if both `ENABLE_DEMO_MODE=true` and
+> `NODE_ENV=production` are present simultaneously, the process exits immediately
+> and refuses to serve traffic.
+
+---
+
+## 4. Secret Manager Configuration & IAM Setup
 
 Configure Google Cloud Secret Manager to securely supply the Gemini API key to Cloud Run without hardcoding:
 
@@ -80,7 +107,7 @@ gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
 
 ---
 
-## 4. Google Cloud Run Deployment Guide
+## 5. Google Cloud Run Deployment Guide
 
 Deploy Gemini LifeOS to Google Cloud Run with the required campaign tracking labels and Secret Manager binding:
 
@@ -96,11 +123,15 @@ gcloud run deploy gemini-lifeos \
   --allow-unauthenticated \
   --port 3000 \
   --set-secrets GEMINI_API_KEY=GEMINI_API_KEY:latest \
+  --set-env-vars NODE_ENV=production \
   --update-labels dev-tutorial=cloud-run-ai-challenge
 
 # 3. Verify deployed service status and URL
 gcloud run services describe gemini-lifeos --region us-central1
 ```
+
+> **Note:** `ENABLE_DEMO_MODE` is intentionally absent from this command.
+> Do not add it to production deployments.
 
 ---
 

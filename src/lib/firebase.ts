@@ -59,25 +59,8 @@ export function sanitizePayload<T>(obj: T): T {
 // ---------------- AUTHENTICATION HELPERS ----------------
 
 export async function loginWithGoogle(): Promise<User> {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
-  } catch (error: any) {
-    // If running in restricted iframe without popup support or demo credentials, provide mock fallback user
-    console.warn('[GeminiLifeOS] Popup auth failed or running in preview sandbox. Initializing guest session:', error?.message);
-    
-    // Create or retrieve persistent demo user
-    const demoUid = 'demo_user_' + Math.random().toString(36).substring(2, 9);
-    const mockUser: any = {
-      uid: localStorage.getItem('demo_user_uid') || demoUid,
-      email: 'alex.creator@example.com',
-      displayName: 'Alex Rivers',
-      photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      getIdToken: async () => 'mock_verified_jwt_bearer_token_' + (localStorage.getItem('demo_user_uid') || demoUid),
-    };
-    localStorage.setItem('demo_user_uid', mockUser.uid);
-    return mockUser;
-  }
+  const result = await signInWithPopup(auth, googleProvider);
+  return result.user;
 }
 
 export async function logoutUser(): Promise<void> {
@@ -86,28 +69,10 @@ export async function logoutUser(): Promise<void> {
   } catch (err) {
     console.warn('[GeminiLifeOS] Firebase signOut notice:', err);
   }
-  localStorage.removeItem('demo_user_uid');
 }
 
 export function subscribeToAuthChanges(callback: (user: User | null) => void) {
-  return onAuthStateChanged(auth, (user) => {
-    if (user) {
-      callback(user);
-    } else {
-      const storedDemoUid = localStorage.getItem('demo_user_uid');
-      if (storedDemoUid) {
-        callback({
-          uid: storedDemoUid,
-          email: 'alex.creator@example.com',
-          displayName: 'Alex Rivers',
-          photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          getIdToken: async () => 'mock_verified_jwt_bearer_token_' + storedDemoUid,
-        } as any);
-      } else {
-        callback(null);
-      }
-    }
-  });
+  return onAuthStateChanged(auth, callback);
 }
 
 export async function getUserAuthToken(user: User): Promise<string> {
