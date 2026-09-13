@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, Target, Tag, ArrowLeft, RefreshCw, CheckCircle2, BookmarkPlus, AlertCircle } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { InteractionDoc, ChatMessage, JournalCategory, GoalDoc } from '../types';
 import { sendJournalChatMessage, summarizeJournalEntry, extractGoalsFromEntry } from '../lib/gemini';
 import { saveInteraction, saveGoal } from '../lib/firebase';
@@ -359,7 +359,35 @@ export const JournalEditor: React.FC<JournalEditorProps> = ({
                       <p className="whitespace-pre-wrap">{m.content}</p>
                     ) : (
                       <div className="prose prose-invert prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1">
-                        <ReactMarkdown>{m.content}</ReactMarkdown>
+                        <ReactMarkdown
+                          // Explicitly re-declare the default URL transform so the
+                          // protocol allowlist (https, http, mailto, etc.) is visible
+                          // here and not silently dependent on library defaults.
+                          urlTransform={defaultUrlTransform}
+                          components={{
+                            // Harden links: add rel="noopener noreferrer" to prevent
+                            // tab-napping and referrer leakage. Navigation behavior
+                            // (same tab) is otherwise preserved.
+                            a({ href, children, ...props }) {
+                              return (
+                                <a {...props} href={href} rel="noopener noreferrer">
+                                  {children}
+                                </a>
+                              );
+                            },
+                            // Block outbound image requests from AI-generated Markdown.
+                            // Alt text is preserved so semantic meaning is not lost.
+                            img({ alt }) {
+                              return (
+                                <span className="text-xs text-slate-400 italic">
+                                  [image: {alt}]
+                                </span>
+                              );
+                            },
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
                       </div>
                     )}
                   </div>
