@@ -30,6 +30,26 @@ if (!getAdminApps().length) {
 const app = express();
 const PORT = 3000;
 
+// ---------------- REVERSE-PROXY TRUST CONFIGURATION ----------------
+// Cloud Run fully managed (the only documented deployment for this project)
+// places exactly one Google-controlled proxy hop between the internet and this
+// container: the Google Front End (GFE) + Cloud Run load balancer.
+//
+// Numeric trust proxy: 1 tells Express to trust that single hop, so req.ip is
+// resolved from the rightmost entry in X-Forwarded-For — the real client IP as
+// inserted by GFE — rather than the load balancer's internal address.
+//
+// Security properties:
+//   - An attacker who spoofs X-Forwarded-For in their request gets their value
+//     placed to the LEFT of GFE's insertion; trust proxy: 1 reads from the
+//     RIGHT, so the spoofed value is never used as req.ip.
+//   - Do NOT change this to trust proxy: true (boolean). That trusts the entire
+//     chain and is trivially spoofable.
+//   - If an external Application Load Balancer, Cloud Armor, or CDN is added in
+//     front of Cloud Run in the future, the hop count must be re-evaluated and
+//     this value updated accordingly.
+app.set('trust proxy', 1);
+
 // ---------------- PRODUCTION-SAFE CORS CONFIGURATION ----------------
 // Restrict allowed origins to APP_URL (and local development origins).
 const allowedOrigins = new Set<string>();
@@ -78,20 +98,45 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ---------------- RATE LIMITING ----------------
-// Production-safe rate limiting for Gemini AI routes to prevent quota exhaustion and abuse
-// Allows up to 60 requests per 1-minute window per IP, which comfortably accommodates active journaling
-const geminiApiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 60, // 60 requests per window
+// Two-layer rate limiting for the Gemini API routes.
+//
+// Layer 1 — IP-based, runs BEFORE authentication.
+// Purpose: prevent unauthenticated flood attacks from exhausting Firebase Admin
+// SDK quota or reaching Gemini before the request is validated.  A higher
+// ceiling (200/min) is used because multiple legitimate users may share one IP
+// (corporate NAT, mobile carrier NAT).  The real client IP is available here
+// because trust proxy: 1 is set above.
+const geminiIpLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1-minute window
+  max: 200,            // 200 requests per IP per minute
   standardHeaders: true,
   legacyHeaders: false,
+  message: {
+    error: 'Rate limit exceeded: Too many requests from this network. Please try again shortly.',
+  },
+});
+
+// Layer 2 — Verified Firebase UID-based, runs AFTER verifyUserAuth.
+// Purpose: enforce a per-user Gemini API quota using the cryptographically
+// verified UID set on req.verifiedUid by verifyUserAuth.  The key is NEVER
+// derived from an unverified JWT claim — verifyUserAuth must run first and
+// call next() before this limiter executes.  The 'anonymous' fallback is a
+// defensive guard; it is never reachable in practice because verifyUserAuth
+// either sets verifiedUid and calls next(), or returns a 401 response.
+const geminiUidLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1-minute window
+  max: 30,             // 30 requests per verified user per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => (req as AuthenticatedRequest).verifiedUid ?? 'anonymous',
   message: {
     error: 'Rate limit exceeded: Too many AI requests. Please slow down and try again shortly.',
   },
 });
 
-// Apply rate limiter to all Gemini API endpoints
-app.use('/api/gemini', geminiApiLimiter);
+// Layer 1 applied to all /api/gemini/* routes — pre-authentication IP guard.
+// Layer 2 is applied per-route after verifyUserAuth (see route definitions below).
+app.use('/api/gemini', geminiIpLimiter);
 
 // ---------------- EXTEND EXPRESS REQUEST CONTEXT ----------------
 export interface AuthenticatedRequest extends Request {
@@ -227,7 +272,7 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 // Multi-turn Journal Conversation
-app.post('/api/gemini/chat', verifyUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/gemini/chat', verifyUserAuth, geminiUidLimiter, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], category = 'daily_reflection', userTitle = '' } = body;
@@ -279,7 +324,7 @@ Guidelines:
 });
 
 // Auto-Summarize & Sentiment Extraction
-app.post('/api/gemini/summarize', verifyUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/gemini/summarize', verifyUserAuth, geminiUidLimiter, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], title = '' } = body;
@@ -342,7 +387,7 @@ app.post('/api/gemini/summarize', verifyUserAuth, async (req: AuthenticatedReque
 });
 
 // Goal Extraction from Conversation
-app.post('/api/gemini/extract-goals', verifyUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/gemini/extract-goals', verifyUserAuth, geminiUidLimiter, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { messages = [], entryTitle = '' } = body;
@@ -414,7 +459,7 @@ function sanitizeForPrompt(value: string): string {
 }
 
 // Weekly Reflection & Multi-Entry Synthesis
-app.post('/api/gemini/weekly-reflection', verifyUserAuth, async (req: AuthenticatedRequest, res: Response) => {
+app.post('/api/gemini/weekly-reflection', verifyUserAuth, geminiUidLimiter, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const { entries = [], timeRangeLabel = 'Past 7 Days' } = body;
