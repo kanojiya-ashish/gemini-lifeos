@@ -71,8 +71,10 @@ export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
   };
 
   const handleDelete = async (goalId: string) => {
+   if (confirm('Are you sure you want to delete this goal?')) {
     await deleteGoal(userId, goalId);
     onGoalsUpdated();
+   }
   };
 
   const filteredGoals = goals.filter((g) => {
