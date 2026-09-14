@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Target, Plus, CheckCircle2, Circle, Archive, Trash2, Calendar, Sparkles } from 'lucide-react';
 import { GoalDoc, GoalStatus, GoalCategory } from '../types';
 import { saveGoal, deleteGoal } from '../lib/firebase';
@@ -21,6 +21,7 @@ export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
   const [targetCategory, setTargetCategory] = useState<GoalCategory>('personal');
   const [targetDate, setTargetDate] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const progressTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const handleCreateGoal = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,16 +60,24 @@ export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
     onGoalsUpdated();
   };
 
-  const handleUpdateProgress = async (goal: GoalDoc, progress: number) => {
-    const isNowDone = progress >= 100;
-    const updated: GoalDoc = {
-      ...goal,
-      progress,
-      status: isNowDone ? 'completed' : goal.status === 'completed' ? 'active' : goal.status,
-    };
+const handleUpdateProgress = (goal: GoalDoc, progress: number) => {
+  const isNowDone = progress >= 100;
+  const updated: GoalDoc = {
+    ...goal,
+    progress,
+    status: isNowDone ? 'completed' : goal.status === 'completed' ? 'active' : goal.status,
+  };
+
+  if (progressTimers.current[goal.id]) {
+    clearTimeout(progressTimers.current[goal.id]);
+  }
+
+  progressTimers.current[goal.id] = setTimeout(async () => {
     await saveGoal(userId, updated);
     onGoalsUpdated();
-  };
+    delete progressTimers.current[goal.id];
+  }, 300);
+};
 
   const handleDelete = async (goalId: string) => {
    if (confirm('Are you sure you want to delete this goal?')) {
