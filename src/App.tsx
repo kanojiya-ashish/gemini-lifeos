@@ -150,7 +150,19 @@ export default function App() {
       return [newGoal, ...filtered];
     });
   };
+  const handleGoalUpdated = (updatedGoal: GoalDoc | null, deletedGoalId?: string) => {
+  setGoals((prev) => {
+    if (deletedGoalId) {
+      return prev.filter((g) => g.id !== deletedGoalId);
+    }
 
+    if (updatedGoal) {
+      return prev.map((g) => (g.id === updatedGoal.id ? updatedGoal : g));
+    }
+
+    return prev;
+  });
+};
   const handleInsightGenerated = (newInsight: InsightDoc) => {
     setInsights((prev) => [newInsight, ...prev]);
   };

@@ -6,7 +6,7 @@ import { saveGoal, deleteGoal } from '../lib/firebase';
 interface GoalsTrackerProps {
   userId: string;
   goals: GoalDoc[];
-  onGoalsUpdated: () => void;
+  onGoalsUpdated: (updatedGoal: GoalDoc | null, deletedGoalId?: string) => void;
 }
 
 export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
@@ -46,7 +46,7 @@ export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
     setTargetDate('');
     setIsCreating(false);
     setIsSaving(false);
-    onGoalsUpdated();
+    onGoalsUpdated(newGoal);
   };
 
   const handleToggleStatus = async (goal: GoalDoc) => {
@@ -57,10 +57,10 @@ export const GoalsTracker: React.FC<GoalsTrackerProps> = ({
       progress: nextStatus === 'completed' ? 100 : goal.progress,
     };
     await saveGoal(userId, updated);
-    onGoalsUpdated();
+    onGoalsUpdated(updated);
   };
 
-const handleUpdateProgress = (goal: GoalDoc, progress: number) => {
+  const handleUpdateProgress = (goal: GoalDoc, progress: number) => {
   const isNowDone = progress >= 100;
   const updated: GoalDoc = {
     ...goal,
@@ -74,7 +74,7 @@ const handleUpdateProgress = (goal: GoalDoc, progress: number) => {
 
   progressTimers.current[goal.id] = setTimeout(async () => {
     await saveGoal(userId, updated);
-    onGoalsUpdated();
+    onGoalsUpdated(updated);
     delete progressTimers.current[goal.id];
   }, 300);
 };
@@ -82,7 +82,7 @@ const handleUpdateProgress = (goal: GoalDoc, progress: number) => {
   const handleDelete = async (goalId: string) => {
    if (confirm('Are you sure you want to delete this goal?')) {
     await deleteGoal(userId, goalId);
-    onGoalsUpdated();
+    onGoalsUpdated(null, goalId);
    }
   };
 
